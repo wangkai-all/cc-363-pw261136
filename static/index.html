@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cleanroom · generation rollout control</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>Cleanroom</h1>
+      <p class="sub">Streaming cleaning · generation rollout control</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="link-state" class="link-state" role="status">connecting…</span>
+    <button id="btn-refresh" class="btn ghost" type="button">Refresh</button>
+    <button id="btn-reset" class="btn ghost danger" type="button">Reset demo</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden role="alert"></div>
+
+  <section class="kpis" aria-label="Pipeline summary">
+    <div class="tile">
+      <span class="tile-label">Serving generation</span>
+      <span class="tile-value" id="kpi-active">–</span>
+      <span class="tile-foot" id="kpi-active-foot">–</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Current events</span>
+      <span class="tile-value" id="kpi-events">–</span>
+      <span class="tile-foot" id="kpi-events-foot">–</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Arrivals · last 5 min</span>
+      <span class="tile-value" id="kpi-arrivals">–</span>
+      <span class="tile-foot" id="kpi-arrivals-foot">–</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Query coverage</span>
+      <span class="tile-value" id="kpi-coverage">–</span>
+      <span class="tile-foot" id="kpi-coverage-foot">–</span>
+    </div>
+  </section>
+
+  <section class="grid two-one">
+    <article class="card" id="gen-card">
+      <div class="card-head">
+        <h2>Generations</h2>
+        <p class="card-sub">A generation is an immutable rule set. Cleaning never changes what readers see until approval.</p>
+      </div>
+      <div id="gens" class="gens"></div>
+      <div class="new-gen">
+        <div class="new-gen-copy">
+          <h3>Prepare a new rule generation</h3>
+          <p>Runs a separate backfill over historical events. Incremental arrivals join it while it builds.</p>
+        </div>
+        <div class="new-gen-form">
+          <label>Rule set
+            <select id="new-version">
+              <option value="2.0.0">2.0.0 · exact money, aliases, validation</option>
+            </select>
+          </label>
+          <label>Backfill from <span class="hint">(empty = full history)</span>
+            <input id="backfill-from" type="datetime-local" step="60" />
+          </label>
+          <button id="btn-backfill" class="btn primary" type="button">Start backfill</button>
+        </div>
+      </div>
+    </article>
+
+    <article class="card" id="pipe-card">
+      <div class="card-head">
+        <h2>Processes</h2>
+        <p class="card-sub">Queue, workers and the query service are separate processes on one database.</p>
+      </div>
+      <div id="procs" class="procs"></div>
+      <div class="proc-actions">
+        <button id="btn-proc-queue-start" class="btn ghost" type="button">Start queue</button>
+        <button id="btn-proc-queue-stop" class="btn ghost" type="button">Stop queue</button>
+        <button id="btn-queue" class="btn ghost" type="button">Pause ingest</button>
+        <button id="btn-proc-worker-start" class="btn ghost" type="button">Start worker</button>
+        <button id="btn-proc-worker-stop" class="btn ghost danger" type="button">Stop worker (exit)</button>
+        <button id="btn-work" class="btn ghost" type="button">Run worker inline</button>
+        <button id="btn-reclaim" class="btn ghost" type="button">Reclaim stale claims</button>
+      </div>
+      <p class="switch-hint" style="margin:-6px 0 14px">
+        “Stop worker (exit)” kills the process mid-run. Arrivals keep landing in the queue;
+        start it again and the pending work items are cleaned from where the queue left them.
+      </p>
+      <div class="table-note">
+        <h3>How a query is assembled</h3>
+        <ol class="steps">
+          <li><b>raw event</b> (immutable, every revision kept)</li>
+          <li><b>serving window</b> by event time → one generation</li>
+          <li><b>published result</b> for that generation + revision</li>
+        </ol>
+        <p class="muted">All three read from one snapshot, so a switch returns the old set or the new set — never a splice.</p>
+      </div>
+    </article>
+  </section>
+
+  <section class="card" id="timeline-card">
+    <div class="card-head row">
+      <div>
+        <h2>Serving timeline</h2>
+        <p class="card-sub">Which generation answers each event-time interval, plus suspended ranges. Widths are proportional to time.</p>
+      </div>
+      <div class="cov-legend" id="timeline-legend"></div>
+    </div>
+    <div id="timeline" class="cov"></div>
+    <div class="table-view">
+      <label class="tv-toggle"><input type="checkbox" id="timeline-table-toggle" /> Show interval table</label>
+      <div class="table-wrap" id="timeline-table" hidden></div>
+    </div>
+  </section>
+
+  <section class="card" id="diff-card">
+    <div class="card-head row">
+      <div>
+        <h2>Shadow difference</h2>
+        <p class="card-sub">What changes for readers if the candidate is approved. Comparing current serving generation against the newest candidate.</p>
+      </div>
+      <div class="seg" id="diff-toggle" role="group" aria-label="View">
+        <button class="seg-btn is-on" data-view="chart" type="button">Chart</button>
+        <button class="seg-btn" data-view="table" type="button">Table</button>
+      </div>
+    </div>
+    <div id="diff-body" class="diff-body"></div>
+  </section>
+
+  <section class="grid two-one">
+    <article class="card" id="approve-card">
+      <div class="card-head">
+        <h2>Switch control</h2>
+        <p class="card-sub">Approval publishes results and flips serving windows in one transaction.</p>
+      </div>
+      <div id="switch-body" class="switch-body"></div>
+    </article>
+    <article class="card">
+      <div class="card-head">
+        <h2>Audit trail</h2>
+        <p class="card-sub">Every reader-visible change.</p>
+      </div>
+      <ul id="audit" class="audit"></ul>
+    </article>
+  </section>
+
+  <section class="card" id="query-card">
+    <div class="card-head row">
+      <div>
+        <h2>Query explorer</h2>
+        <p class="card-sub">Expand any row to its raw input, rule trace and serving window.</p>
+      </div>
+      <div class="filters">
+        <label class="field">From
+          <input id="q-from" type="datetime-local" step="60" />
+        </label>
+        <label class="field">To
+          <input id="q-to" type="datetime-local" step="60" />
+        </label>
+        <label class="field">Limit
+          <input id="q-limit" type="number" min="1" max="200" value="12" />
+        </label>
+        <button id="btn-query" class="btn primary" type="button">Run query</button>
+      </div>
+    </div>
+    <div id="query-body" class="query-body"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Cleanroom demo · synthetic events · SQLite WAL</span>
+  <span id="clock"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
